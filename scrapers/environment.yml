@@ -1,0 +1,8 @@
+name: appstarters
+channels:
+    - memex
+dependencies:
+    - python=2.7
+    - scrapy
+    - elasticsearch
+    - elasticsearch-py
