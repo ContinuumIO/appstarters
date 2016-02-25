@@ -1,6 +1,7 @@
 name: appstarters
 channels:
     - memex
+    - scrapinghub
 dependencies:
     - python=2.7
     - scrapy
