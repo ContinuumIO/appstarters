@@ -5,6 +5,7 @@
 # Don't forget to add your pipeline to the ITEM_PIPELINES setting
 # See: http://doc.scrapy.org/en/latest/topics/item-pipeline.html
 
+import datetime
 
 from elasticsearch import Elasticsearch, helpers
 
@@ -22,7 +23,8 @@ class ElasticsearchPipeline(object):
 
     def process_item(self, item, spider):
         # add item to the batch upload queue.  Does not actually upload yet
-        self.batch.append({"_source": dict(item), "_type": spider.name})
+        self.batch.append({"_source": dict(item), "_type": spider.name,
+                           "_scraped_date": datetime.datetime.now()})
         # This triggers an upload every 'batch_size' items
         if len(self.batch) >= self.batch_size:
             helpers.bulk(client=self.es_instance, actions=self.batch, index=self.index)

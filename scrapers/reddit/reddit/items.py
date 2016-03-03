@@ -32,10 +32,12 @@ def time_string_to_datetime(input_field):
 class RedditCommentItem(scrapy.Item):
     poster = scrapy.Field(output_processor=extract_string_from_list)
     post_timestamp = scrapy.Field(output_processor=time_string_to_datetime)
-    scrape_timestamp = scrapy.Field()#output_processor=time_string_to_datetime)
+    scrape_timestamp = scrapy.Field()
     text = scrapy.Field(output_processor=extract_string_from_list)
     score = scrapy.Field(output_processor=score_to_number)
     parent = scrapy.Field(output_processor=extract_string_from_list)
     children = scrapy.Field(output_processor=extract_string_from_list)
     permalink = scrapy.Field(output_processor=extract_string_from_list)
 
+class SubRedditResultsPageItem(scrapy.Item):
+    pass
