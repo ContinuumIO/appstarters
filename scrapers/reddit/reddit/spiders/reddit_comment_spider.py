@@ -38,10 +38,10 @@ def parse_link_page(response):
         l.add_xpath('title', title + '/a/text()')
         l.add_xpath('link', title + '/a/@href')
         l.add_xpath('poster', tagline + '/a[contains(@class, "author")]/text()')
-        l.add_xpath('score', tagline + '//div[contains(@class, "score unvoted")]/text()')
+        l.add_xpath('score', './div[contains(@class, "midcol")]/div[@class="score unvoted"]/text()')
         l.add_xpath('number_of_comments', buttons + '//a[contains(@class, "comments")]/text()')
         l.add_xpath('comments_link', buttons + '//a[contains(@class, "comments")]/@href')
-        l.add_xpath('subreddit', '/@data-subreddit')
+        l.add_xpath('subreddit', './@data-subreddit')
         l.add_xpath('post_timestamp', tagline + '/time/@datetime')
         l.add_value('scrape_timestamp', datetime.datetime.now())
 
@@ -49,13 +49,12 @@ def parse_link_page(response):
         # if there are any comments for the post, go scrape them
         item["comments"] = []
         if item["number_of_comments"] > 0:
-            print("trying to scrape comment page")
             yield scrapy.Request(item["comments_link"], callback=parse_comments,
                                  meta={'item': item})
         yield l.load_item()
 
 
-class RedditSpider(scrapy.Spider):
+class RedditSpider(CrawlSpider):
     name = "reddit"
     allowed_domains = ["reddit.com"]
     start_urls = (
@@ -64,14 +63,9 @@ class RedditSpider(scrapy.Spider):
 
     index = 'reddit_python'
 
-    #rules = (
-        #Rule(LinkExtractor(allow=('https://www.reddit.com/r/IAmA/comments/470yep/videogameattorney_here_to_answer_questions_about/')), callback='parse_comments'),
-        #Rule(LinkExtractor(allow=('https://www.reddit.com/r/[A-Za-z0-9_]+/comments/[A-Za-z0-9_]+/we_are_rocksdb_developers_ask_us_anything/$')), callback='parse_comments', follow=True), #[A-Za-z0-9\._+]+
-
-        #Rule(LinkExtractor(allow=('?count=25&')))
-    #)
-
-    def parse(self, response):
-        return parse_link_page(response)
-
+    rules = (
+        Rule(LinkExtractor(
+                 restrict_xpaths=('//span[@class="nextprev"]/a[contains(@rel, "next")]', ),),
+             callback=parse_link_page, follow=True,),
+    )
 

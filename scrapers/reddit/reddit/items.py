@@ -5,6 +5,7 @@
 # See documentation in:
 # http://doc.scrapy.org/en/latest/topics/items.html
 
+from __future__ import print_function
 from datetime import datetime
 
 import scrapy
@@ -24,8 +25,16 @@ def score_to_number(input_field):
     """output parser to get numeric score out of string.  Assumes first entry
     is numeric.  If not numeric (valueerror, sets score to 0."""
     try:
-        score = int(extract_string_from_list(input_field).split(" ")[0])
+        field = extract_string_from_list(input_field)
+        if len(field.split(" ")) > 1:
+            field = field.split(" ")[0]
+        score = int(field)
     except ValueError:
+        # when reddit doesn't have a score, sometimes the text reads
+        #   Comment
+        # instead of
+        #   10 comments
+        # thus we interpret that failure to convert to int as 0-valued
         score = 0
     return score
 
