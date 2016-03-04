@@ -21,8 +21,13 @@ def extract_string_from_list(input_object):
 
 
 def score_to_number(input_field):
-    """output parser to get numeric score out of string"""
-    return int(extract_string_from_list(input_field).split(" ")[0])
+    """output parser to get numeric score out of string.  Assumes first entry
+    is numeric.  If not numeric (valueerror, sets score to 0."""
+    try:
+        score = int(extract_string_from_list(input_field).split(" ")[0])
+    except ValueError:
+        score = 0
+    return score
 
 
 def time_string_to_datetime(input_field):
@@ -39,5 +44,16 @@ class RedditCommentItem(scrapy.Item):
     children = scrapy.Field(output_processor=extract_string_from_list)
     permalink = scrapy.Field(output_processor=extract_string_from_list)
 
-class SubRedditResultsPageItem(scrapy.Item):
-    pass
+
+class RedditPostItem(scrapy.Item):
+    title = scrapy.Field(output_processor=extract_string_from_list)
+    link = scrapy.Field(output_processor=extract_string_from_list)
+    poster = scrapy.Field(output_processor=extract_string_from_list)
+    score = scrapy.Field(output_processor=score_to_number)
+    number_of_comments = scrapy.Field(output_processor=score_to_number)
+    comments_link = scrapy.Field(output_processor=extract_string_from_list)
+    subreddit = scrapy.Field(output_processor=extract_string_from_list)
+    post_timestamp = scrapy.Field(output_processor=time_string_to_datetime)
+    scrape_timestamp = scrapy.Field()
+    comments = scrapy.Field()  # the list of comments parsed as RedditCommentItems
+
