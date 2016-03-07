@@ -1,0 +1,12 @@
+redis:
+  image: redis:alpine
+  ports:
+    - "6379:6379"
+  links:
+    - kafka
+# this is kafka and zookeeper
+kafka:
+  image: spotify/kafka
+  ports:
+    - "2181:2181"
+    - "9092:9092"
