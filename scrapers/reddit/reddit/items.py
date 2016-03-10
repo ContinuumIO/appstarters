@@ -43,10 +43,13 @@ def time_string_to_datetime(input_field):
     return datetime.strptime(extract_string_from_list(input_field)[:-6], "%Y-%m-%dT%H:%M:%S")
 
 
+def take_first(input_field):
+    return input_field[0]
+
 class RedditCommentItem(scrapy.Item):
     poster = scrapy.Field(output_processor=extract_string_from_list)
     post_timestamp = scrapy.Field(output_processor=time_string_to_datetime)
-    scrape_timestamp = scrapy.Field()
+    scrape_timestamp = scrapy.Field(output_processor=take_first)
     text = scrapy.Field(output_processor=extract_string_from_list)
     score = scrapy.Field(output_processor=score_to_number)
     parent = scrapy.Field(output_processor=extract_string_from_list)
@@ -63,6 +66,6 @@ class RedditPostItem(scrapy.Item):
     comments_link = scrapy.Field(output_processor=extract_string_from_list)
     subreddit = scrapy.Field(output_processor=extract_string_from_list)
     post_timestamp = scrapy.Field(output_processor=time_string_to_datetime)
-    scrape_timestamp = scrapy.Field()
+    scrape_timestamp = scrapy.Field(output_process=take_first)
     comments = scrapy.Field()  # the list of comments parsed as RedditCommentItems
 
