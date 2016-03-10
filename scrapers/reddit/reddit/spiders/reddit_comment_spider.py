@@ -49,7 +49,8 @@ def parse_link_page(response):
         # if there are any comments for the post, go scrape them
         item["comments"] = []
         if item["number_of_comments"] > 0:
-            yield scrapy.Request(item["comments_link"], callback=parse_comments,
+            yield scrapy.Request(item["comments_link"]+"?limit=500",
+                                 callback=parse_comments,
                                  meta={'item': item})
         yield l.load_item()
 
