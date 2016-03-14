@@ -23,14 +23,26 @@ class ElasticsearchPipeline(object):
 
     def process_item(self, item, spider):
         # add item to the batch upload queue.  Does not actually upload yet
-        action = {'_op_type': 'update',
-                  '_index': self.index,
-                  '_type': spider.name,
-                  '_id': item["link"]+item["scrape_timestamp"][0].isoformat(),
-                  'doc': dict(item),
-                  'doc_as_upsert': "true",
-                  }
-        self.batch.append(action)
+        comments = item["comments"]
+        for comment in comments:
+            self.batch.append({'_op_type': 'update',
+                               '_index': self.index,
+                               '_type': "comment",
+                               '_id': comment['permalink']+comment["scrape_timestamp"].isoformat(),
+                               'doc': dict(comment),
+                               'doc_as_upsert': "true",
+                  })
+        # do not store comments in post table
+        item["comments"] = []
+        self.batch.append({'_op_type': 'update',
+                           '_index': self.index,
+                           '_type': 'post',
+                           '_id': item["link"]+item["scrape_timestamp"][0].isoformat(),
+                           'doc': dict(item),
+                           'doc_as_upsert': "true",
+                  })
+
+        # This triggers an upload every 'batch_size' items
         if len(self.batch) >= self.batch_size:
             helpers.bulk(client=self.es_instance, actions=self.batch, index=self.index)
             self.batch = []

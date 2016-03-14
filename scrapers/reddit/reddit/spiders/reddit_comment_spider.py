@@ -20,7 +20,7 @@ def parse_comments(response):
         l.add_xpath('score', tagline + '/span[contains(@class, "unvoted")]/text()')
         l.add_xpath('post_timestamp', tagline + '/time/@datetime')
         l.add_value('scrape_timestamp', datetime.datetime.now())
-        l.add_xpath('text', content + '/div[contains(@class, "usertext-body")]/div/p')
+        l.add_xpath('text', content + '/div[contains(@class, "usertext-body")]/div')
         l.add_xpath('permalink', buttons + '/li[@class="first"]/a[@class="bylink"]/@href')
         # l.add_xpath('parent', '//div[@class="product_title"]')
         # l.add_xpath('children', '//div[@class="product_title"]')
