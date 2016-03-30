@@ -70,12 +70,14 @@ def get_sentiment_dataframe(elasticsearch_iterable, content_field, time_field):
     return df
 
 
-def slice_data(data, start_time, interval):
+def slice_data(data, start_time, end_time, interval):
     """Divide input data up into time chunks.
 
     data : a Pandas dataframe with the time as the primary index
     start_time : A datetime.datetime object representing a time to start from.  Times after this time are not part
          of the output of this function.  A value of None means datetime.datetime.now()
+    end_time : the furthest back in time that we should look at.
+         A value of None means go to the end of the data.
     interval : A datetime.timedelta object.  Times start from the start_time, and step backwards through time with
          this timedelta as the step size.  This is the time-size of each chunk.
     """
@@ -85,7 +87,7 @@ def slice_data(data, start_time, interval):
     if not start_time:
         current_time = datetime.datetime.now()
     intervals = {}
-    min_time = min(data.index)
+    min_time = end_time if end_time else min(data.index)
     while current_time > min_time:
         start = data.index.searchsorted(current_time - interval)
         end = data.index.searchsorted(current_time)
@@ -118,12 +120,12 @@ def time_groups_to_plot_elements(slices, nbins, content_field):
 
 
 def query_sentiment(content_field, time_field, query={}, hosts="https://localhost:9200", doctype="comment",
-                    start_time=None, interval=datetime.timedelta(days=1), categories=["negative", "null", "positive"]):
+                    start_time=None, end_time=None, interval=datetime.timedelta(days=1), categories=["negative", "null", "positive"]):
     records = get_elasticsearch_data(hosts=hosts, content_field=content_field, time_field=time_field, query=query,
-                                     doc_type=doctype)
+                                     doc_type=doctype, start_time=start_time, end_time=end_time)
     # takes iterable records, outputs pandas dataframe
     raw_df = get_sentiment_dataframe(records, content_field=content_field, time_field=time_field)
-    time_slices = slice_data(raw_df, start_time=start_time, interval=interval)
+    time_slices = slice_data(raw_df, start_time=start_time, end_time=end_time, interval=interval)
     line_data = pd.DataFrame.from_dict({time: record[content_field+"_sentiment"].mean() for time, record in time_slices.items()},
                                        orient="index")
     line_data = line_data.sort_index()
@@ -165,11 +167,11 @@ def data_to_areas(plot_data):
     lower_bound = lower_bounds.min()
     lower_bounds[negative_lower_bounds] /= lower_bound
     lower_bounds[negative_lower_bounds] *= sign
-    lower_bounds[lower_bounds>0] /= upper_bounds.max()
-    negative_upper_bounds=upper_bounds < 0
+    lower_bounds[lower_bounds > 0] /= upper_bounds.max()
+    negative_upper_bounds = upper_bounds < 0
     upper_bounds[negative_upper_bounds] /= lower_bound
     upper_bounds[negative_upper_bounds] *= sign
-    upper_bounds[upper_bounds>0] /= upper_bounds.max()
+    upper_bounds[upper_bounds > 0] /= upper_bounds.max()
 
     # concat the upper and lower bounds together - note that lower bounds is reversed.
     #    reversal draws it backwards - think of it as a polygon.  Reversing one draws from start to finish.
@@ -177,19 +179,21 @@ def data_to_areas(plot_data):
     time = np.hstack([plot_data.index[::-1], plot_data.index])
     return areas, time
 
-def sentiment_history_plot(plot_data):
+
+def sentiment_history_plot(plot_data, width=1900, height=850):
     areas, time = data_to_areas(plot_data["area"])
-    p = figure(x_axis_type="datetime")
+    p = figure(width=width, height=height, x_axis_type="datetime")
     colors = brewer["RdBu"][len(areas)][::-1]
+    renderers = {"area": {}}
     for index, cat in enumerate(reversed(plot_data["area"].columns)):
-        p.patch(time, areas[cat], color=colors[index], alpha=0.8, line_color=None, legend=cat)
-    p.line(plot_data["mean"].index, plot_data["mean"][0].values, legend="mean")
-    return p
+        renderers["area"][cat] = p.patch(time, areas[cat], color=colors[index], alpha=0.8, line_color=None, legend=cat)
+    renderers["mean"] = p.line(plot_data["mean"].index, plot_data["mean"][0].values, legend="mean")
+    return p, renderers
 
 
 def show_sentiment_history_plot(plot_data, filename="sentiment_history.png"):
     output_file(filename=filename)
-    show(sentiment_history_plot(plot_data))
+    show(sentiment_history_plot(plot_data)[0])
 
 
 # need a way to parse time intervals.  Gist from:
