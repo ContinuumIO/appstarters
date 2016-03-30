@@ -12,24 +12,61 @@ from bokeh.palettes import brewer
 from bokeh.plotting import figure
 from bokeh.io import output_file, show
 
+import json
+
+
+# batch for uploading sentiment values to ES
+batch_size=1000
+
 
 def get_elasticsearch_data(hosts, content_field, time_field, query={}, doc_type="comment"):
     instance = es.Elasticsearch(hosts=hosts)
-    return helpers.scan(instance, query=query, _source=[content_field, time_field], doc_type=doc_type)
+    calculate_sentiment(instance=instance, content_field=content_field, query=query, doc_type=doc_type)
+    return helpers.scan(instance, query=query, _source=[content_field, time_field, content_field+"_sentiment"],
+                        doc_type=doc_type)
 
 
-def calculate_sentiment(input_data, content_field, time_field):
+def calculate_sentiment(instance, content_field, query, doc_type):
+    batch = []
+    indices = []
+    query = json.loads(query)
+    # TODO: this breaks people's ability to use their own filters.  It's not too bad - just this process might take longer.
+    query = {"query": {"filtered": {
+        "filter": {
+            "missing": {"field": content_field+"_sentiment"}
+        }}}}
+    iterable = helpers.scan(instance, query=json.dumps(query), _source=[content_field],
+                        doc_type=doc_type)
+    for item in iterable:
+        action = {'_op_type': 'update',
+                  '_index': item["_index"],
+                  '_type': item["_type"],
+                  '_id': item["_id"],
+                  'doc': {content_field+"_sentiment": TextBlob(item["_source"][content_field]).polarity},
+                  'doc_as_upsert': "true",
+                  }
+        batch.append(action)
+        indices.append(item["_index"])
+        if len(batch) >= batch_size:
+            helpers.bulk(client=instance, actions=batch)
+            batch = []
+    if batch:
+        helpers.bulk(client=instance, actions=batch)
+    indices = set(indices)
+    for index in indices:
+        instance.indices.refresh(index)
+
+def get_sentiment_dataframe(elasticsearch_iterable, content_field, time_field):
     """
     Given input data as generator or collection of records, this processes the text field, obtaining the sentiment,
     and returns a pandas DataFrame that has the time field as the index.
     """
     # TODO: get rid of _source garbage (see Topik)
-    df = pd.DataFrame(((item["_source"][time_field], item["_source"][content_field]) for item in input_data),
-                      columns=[time_field, content_field])
+    df = pd.DataFrame(((item["_source"][time_field], item["_source"][content_field],
+                        item["_source"][content_field+"_sentiment"]) for item in elasticsearch_iterable),
+                      columns=[time_field, content_field, content_field+"_sentiment"])
     df[time_field] = pd.to_datetime(df[time_field])
     df.set_index(time_field, inplace=True)
-    get_polarity = lambda text: TextBlob(text).polarity
-    df["sentiment"] = df[content_field].apply(get_polarity)
     return df
 
 
@@ -58,7 +95,7 @@ def slice_data(data, start_time, interval):
     return intervals
 
 
-def time_groups_to_plot_elements(slices, nbins):
+def time_groups_to_plot_elements(slices, nbins, content_field):
     """Given the grouped time-sentiment relationships, break it down into a single point/line for the plot.
 
     In each time interval, sentiment is binned into ```nbins```, ranging from -1 to 1.  That time interval is
@@ -71,10 +108,10 @@ def time_groups_to_plot_elements(slices, nbins):
     plot_data = {}
     bins = np.linspace(-1.0, 1.0, nbins)
     for k, v in slices.items():
-        binned_data = np.digitize(v["sentiment"], bins=bins) - 1
+        binned_data = np.digitize(v[content_field+"_sentiment"], bins=bins) - 1
         segments = np.zeros(nbins)
         for bin_id in set(binned_data):
-            segments[bin_id] = v["sentiment"][binned_data == bin_id].count()
+            segments[bin_id] = v[content_field+"_sentiment"][binned_data == bin_id].count()
         segments *= np.sign(bins)
         plot_data[k] = segments
     return plot_data
@@ -85,15 +122,15 @@ def query_sentiment(content_field, time_field, query={}, hosts="https://localhos
     records = get_elasticsearch_data(hosts=hosts, content_field=content_field, time_field=time_field, query=query,
                                      doc_type=doctype)
     # takes iterable records, outputs pandas dataframe
-    raw_df = calculate_sentiment(records, content_field=content_field, time_field=time_field)
+    raw_df = get_sentiment_dataframe(records, content_field=content_field, time_field=time_field)
     group_data = time_groups_to_plot_elements(slice_data(raw_df, start_time=start_time, interval=interval),
-                                             len(categories))
+                                             len(categories), content_field=content_field)
     plot_data = pd.DataFrame(group_data).T.sort_index()
     plot_data.columns = categories
     return plot_data
 
 
-def sentiment_history_plot(plot_data):
+def data_to_areas(plot_data):
     # concat the list of indexed y values into dataframe
     df = plot_data
     #  split the dataframe up into the negative and positive parts.  If negative and positive parts
@@ -122,6 +159,10 @@ def sentiment_history_plot(plot_data):
     #    reversal draws it backwards - think of it as a polygon.  Reversing one draws from start to finish.
     areas = {cat: np.hstack([lower_bounds[cat].values, upper_bounds[cat].values]) for cat in upper_bounds.keys()}
     time = np.hstack([plot_data.index[::-1], plot_data.index])
+    return areas, time
+
+def sentiment_history_plot(plot_data):
+    areas, time = data_to_areas(plot_data)
     p = figure(x_axis_type="datetime")
     colors = brewer["RdBu"][len(areas)][::-1]
     for index, cat in enumerate(reversed(plot_data.columns)):
@@ -251,8 +292,11 @@ if __name__ == "__main__":
     parser.add_argument('-t', "--time_field", help="Field to read time index from", default="post_timestamp")
     parser.add_argument('-d', "--doctype", help="Type of elasticsearch document to search", default="comment")
     parser.add_argument('-s', "--start_time", help="Study only entries from this time forward.  "
-                                                   "Time is ISO 8601 format: yyyy-mm-ddThh:mm:ss.  Default (undefined) "
+                                                   "Time is ISO 8601 format: yyyy-mm-ddThh:mm:ss.  Default (None) "
                                                    "is no limit.", default=None)
+    parser.add_argument('-e', "--end_time", help="Study only entries from this time backward.  "
+                                                   "Time is ISO 8601 format: yyyy-mm-ddThh:mm:ss.  Default (None) "
+                                                   "is current time.", default=None)
     parser.add_argument('-i', "--interval", help="Time interval for grouping posts.  Examples: 4h, 1d", default="4h")
 
     args = parser.parse_args()
