@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 import datetime
 import re
 
@@ -6,7 +8,8 @@ import elasticsearch.helpers as helpers
 import numpy as np
 import pandas as pd
 from textblob import TextBlob
-import bokeh.charts
+from bokeh.palettes import brewer
+from bokeh.plotting import figure
 from bokeh.io import output_file, show
 
 
@@ -39,12 +42,14 @@ def slice_data(data, start_time, interval):
     interval : A datetime.timedelta object.  Times start from the start_time, and step backwards through time with
          this timedelta as the step size.  This is the time-size of each chunk.
     """
-    data = data.sort()
+    # it is essential that the data are sorted here.  If they are not, this step makes no sense at all.
+    data = data.sort_index()
     current_time = start_time
     if not start_time:
         current_time = datetime.datetime.now()
     intervals = {}
-    while current_time > min(data.index):
+    min_time = min(data.index)
+    while current_time > min_time:
         start = data.index.searchsorted(current_time - interval)
         end = data.index.searchsorted(current_time)
         if not data.ix[start:end].empty:
@@ -89,8 +94,39 @@ def query_sentiment(content_field, time_field, query={}, hosts="https://localhos
 
 
 def sentiment_history_plot(plot_data):
-    return bokeh.charts.Area(plot_data[::-1], xlabel="post timestamp", stack=True,
-                             legend="top_left", x_mapper_type="datetime")
+    # concat the list of indexed y values into dataframe
+    df = plot_data
+    #  split the dataframe up into the negative and positive parts.  If negative and positive parts
+    #    are both in the same column, this is wrong, and a per-row approach is needed.
+    #  get rightmost column that has negative numbers in it
+    right_negative = (df <= 0).all(axis=0).nonzero()[0][-1]
+    #  get leftmost positive value that has numbers larger than
+    left_positive = (df >= 0).all(axis=0).nonzero()[0][0]
+
+    #  cumulative sum flips columns around so that summation goes opposite direction to positive space
+    negative_sum = df[df.columns[:right_negative][::-1]].cumsum(axis=1)
+    #  flip around to original order
+    negative_sum = negative_sum[negative_sum.columns[::-1]]
+    #  normal cumsum for the positive columns
+    positive_sum = df[df.columns[left_positive:]].cumsum(axis=1)
+    #  lower bounds of each area series are diff between stacked and orig values
+    negative_lower_bounds = negative_sum
+    negative_upper_bounds = negative_sum - df[negative_sum.columns]
+    positive_lower_bounds = positive_sum - df[positive_sum.columns]
+    positive_upper_bounds = positive_sum
+    lower_bounds = negative_lower_bounds.join(positive_lower_bounds)
+    #  reverse the df so the patch is drawn in correct order
+    lower_bounds = lower_bounds.iloc[::-1]
+    upper_bounds = negative_upper_bounds.join(positive_upper_bounds)
+    # concat the upper and lower bounds together - note that lower bounds is reversed.
+    #    reversal draws it backwards - think of it as a polygon.  Reversing one draws from start to finish.
+    areas = {cat: np.hstack([lower_bounds[cat].values, upper_bounds[cat].values]) for cat in upper_bounds.keys()}
+    time = np.hstack([plot_data.index[::-1], plot_data.index])
+    p = figure(x_axis_type="datetime")
+    colors = brewer["RdBu"][len(areas)][::-1]
+    for index, cat in enumerate(reversed(plot_data.columns)):
+        p.patch(time, areas[cat], color=colors[index], alpha=0.8, line_color=None, legend=cat)
+    return p
 
 
 def show_sentiment_history_plot(plot_data, filename="sentiment_history.png"):
