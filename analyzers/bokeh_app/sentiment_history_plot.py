@@ -123,11 +123,14 @@ def query_sentiment(content_field, time_field, query={}, hosts="https://localhos
                                      doc_type=doctype)
     # takes iterable records, outputs pandas dataframe
     raw_df = get_sentiment_dataframe(records, content_field=content_field, time_field=time_field)
-    group_data = time_groups_to_plot_elements(slice_data(raw_df, start_time=start_time, interval=interval),
-                                             len(categories), content_field=content_field)
-    plot_data = pd.DataFrame(group_data).T.sort_index()
-    plot_data.columns = categories
-    return plot_data
+    time_slices = slice_data(raw_df, start_time=start_time, interval=interval)
+    line_data = pd.DataFrame.from_dict({time: record[content_field+"_sentiment"].mean() for time, record in time_slices.items()},
+                                       orient="index")
+    line_data = line_data.sort_index()
+    area_data = time_groups_to_plot_elements(time_slices, len(categories), content_field=content_field)
+    area_data = pd.DataFrame(area_data).T.sort_index()
+    area_data.columns = categories
+    return {"mean": line_data, "area": area_data}
 
 
 def data_to_areas(plot_data):
@@ -155,6 +158,19 @@ def data_to_areas(plot_data):
     #  reverse the df so the patch is drawn in correct order
     lower_bounds = lower_bounds.iloc[::-1]
     upper_bounds = negative_upper_bounds.join(positive_upper_bounds)
+
+    # normalize to -1:1 so that mean line plot is meaningful
+    negative_lower_bounds = lower_bounds < 0
+    sign = np.sign(lower_bounds.min())
+    lower_bound = lower_bounds.min()
+    lower_bounds[negative_lower_bounds] /= lower_bound
+    lower_bounds[negative_lower_bounds] *= sign
+    lower_bounds[lower_bounds>0] /= upper_bounds.max()
+    negative_upper_bounds=upper_bounds < 0
+    upper_bounds[negative_upper_bounds] /= lower_bound
+    upper_bounds[negative_upper_bounds] *= sign
+    upper_bounds[upper_bounds>0] /= upper_bounds.max()
+
     # concat the upper and lower bounds together - note that lower bounds is reversed.
     #    reversal draws it backwards - think of it as a polygon.  Reversing one draws from start to finish.
     areas = {cat: np.hstack([lower_bounds[cat].values, upper_bounds[cat].values]) for cat in upper_bounds.keys()}
@@ -162,11 +178,12 @@ def data_to_areas(plot_data):
     return areas, time
 
 def sentiment_history_plot(plot_data):
-    areas, time = data_to_areas(plot_data)
+    areas, time = data_to_areas(plot_data["area"])
     p = figure(x_axis_type="datetime")
     colors = brewer["RdBu"][len(areas)][::-1]
-    for index, cat in enumerate(reversed(plot_data.columns)):
+    for index, cat in enumerate(reversed(plot_data["area"].columns)):
         p.patch(time, areas[cat], color=colors[index], alpha=0.8, line_color=None, legend=cat)
+    p.line(plot_data["mean"].index, plot_data["mean"][0].values, legend="mean")
     return p
 
 
