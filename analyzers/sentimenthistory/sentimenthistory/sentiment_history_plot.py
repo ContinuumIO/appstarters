@@ -9,18 +9,31 @@ import numpy as np
 import pandas as pd
 from textblob import TextBlob
 from bokeh.palettes import brewer
-from bokeh.plotting import figure
+from bokeh.plotting import Figure
+from bokeh.models import VBox
 from bokeh.io import output_file, show
 
-import json
+from six import string_types
 
+import json
 
 # batch for uploading sentiment values to ES
 batch_size=1000
 
 
-def get_elasticsearch_data(hosts, content_field, time_field, query={}, doc_type="comment"):
+def get_elasticsearch_data(hosts, content_field, time_field, query={}, doc_type="comment",
+                           start_time=None, end_time=None):
     instance = es.Elasticsearch(hosts=hosts)
+    query_section = query.get("query", {})
+    if start_time:
+        query_section["range"] = {"date": {"gte": start_time}}
+    if end_time:
+        range = query_section.get("range", {})
+        date = range.get("date", {})
+        date["lt"] = end_time
+        query_section["range"] = date
+    if query_section:
+        query["query"] = query_section
     calculate_sentiment(instance=instance, content_field=content_field, query=query, doc_type=doc_type)
     return helpers.scan(instance, query=query, _source=[content_field, time_field, content_field+"_sentiment"],
                         doc_type=doc_type)
@@ -29,13 +42,12 @@ def get_elasticsearch_data(hosts, content_field, time_field, query={}, doc_type=
 def calculate_sentiment(instance, content_field, query, doc_type):
     batch = []
     indices = []
-    query = json.loads(query)
     # TODO: this breaks people's ability to use their own filters.  It's not too bad - just this process might take longer.
-    query = {"query": {"filtered": {
+    query = dict(query, **({"query": {"filtered": {
         "filter": {
             "missing": {"field": content_field+"_sentiment"}
-        }}}}
-    iterable = helpers.scan(instance, query=json.dumps(query), _source=[content_field],
+        }}}}))
+    iterable = helpers.scan(instance, query=query, _source=[content_field],
                         doc_type=doc_type)
     for item in iterable:
         action = {'_op_type': 'update',
@@ -87,7 +99,7 @@ def slice_data(data, start_time, end_time, interval):
     if not start_time:
         current_time = datetime.datetime.now()
     intervals = {}
-    min_time = end_time if end_time else min(data.index)
+    min_time = end_time if end_time else data.index.min()
     while current_time > min_time:
         start = data.index.searchsorted(current_time - interval)
         end = data.index.searchsorted(current_time)
@@ -120,11 +132,20 @@ def time_groups_to_plot_elements(slices, nbins, content_field):
 
 
 def query_sentiment(content_field, time_field, query={}, hosts="https://localhost:9200", doctype="comment",
-                    start_time=None, end_time=None, interval=datetime.timedelta(days=1), categories=["negative", "null", "positive"]):
+                    start_time=None, end_time=None, interval=datetime.timedelta(days=1),
+                    categories=["negative", "null", "positive"]):
+    if not hasattr(query, "keys"):
+        try:
+            query=json.loads(query)
+        except ValueError:
+            # translate plain text queries not in json format into a simple match query
+            query = {"query": {"match": {content_field: query}}}
     records = get_elasticsearch_data(hosts=hosts, content_field=content_field, time_field=time_field, query=query,
                                      doc_type=doctype, start_time=start_time, end_time=end_time)
     # takes iterable records, outputs pandas dataframe
     raw_df = get_sentiment_dataframe(records, content_field=content_field, time_field=time_field)
+    if isinstance(interval, string_types):
+        interval = TimeDeltaType()(interval)
     time_slices = slice_data(raw_df, start_time=start_time, end_time=end_time, interval=interval)
     line_data = pd.DataFrame.from_dict({time: record[content_field+"_sentiment"].mean() for time, record in time_slices.items()},
                                        orient="index")
@@ -161,18 +182,6 @@ def data_to_areas(plot_data):
     lower_bounds = lower_bounds.iloc[::-1]
     upper_bounds = negative_upper_bounds.join(positive_upper_bounds)
 
-    # normalize to -1:1 so that mean line plot is meaningful
-    negative_lower_bounds = lower_bounds < 0
-    sign = np.sign(lower_bounds.min())
-    lower_bound = lower_bounds.min()
-    lower_bounds[negative_lower_bounds] /= lower_bound
-    lower_bounds[negative_lower_bounds] *= sign
-    lower_bounds[lower_bounds > 0] /= upper_bounds.max()
-    negative_upper_bounds = upper_bounds < 0
-    upper_bounds[negative_upper_bounds] /= lower_bound
-    upper_bounds[negative_upper_bounds] *= sign
-    upper_bounds[upper_bounds > 0] /= upper_bounds.max()
-
     # concat the upper and lower bounds together - note that lower bounds is reversed.
     #    reversal draws it backwards - think of it as a polygon.  Reversing one draws from start to finish.
     areas = {cat: np.hstack([lower_bounds[cat].values, upper_bounds[cat].values]) for cat in upper_bounds.keys()}
@@ -180,20 +189,23 @@ def data_to_areas(plot_data):
     return areas, time
 
 
-def sentiment_history_plot(plot_data, width=1900, height=850):
+def sentiment_history_plots(plot_data, width=1200, height=700):
     areas, time = data_to_areas(plot_data["area"])
-    p = figure(width=width, height=height, x_axis_type="datetime")
+    area_plot = Figure(plot_width=width, plot_height=height/2, x_axis_type="datetime", title="Cumulative Categorized Sentiment")
     colors = brewer["RdBu"][len(areas)][::-1]
-    renderers = {"area": {}}
-    for index, cat in enumerate(reversed(plot_data["area"].columns)):
-        renderers["area"][cat] = p.patch(time, areas[cat], color=colors[index], alpha=0.8, line_color=None, legend=cat)
-    renderers["mean"] = p.line(plot_data["mean"].index, plot_data["mean"][0].values, legend="mean")
-    return p, renderers
+    area_renderers = {cat: area_plot.patch(time, areas[cat], color=colors[index], alpha=0.8, line_color=None, legend=cat)
+                      for index, cat in enumerate(reversed(plot_data["area"].columns))}
+    mean_plot = Figure(plot_width=width, plot_height=height/2, x_axis_type="datetime", title="Sentiment mean",
+                       x_range=area_plot.x_range, y_range=[-1.0, 1.0])
+    mean_renderer = mean_plot.line(plot_data["mean"].index, plot_data["mean"][0].values)
+    return {"area": {"plot": area_plot, "renderers": area_renderers,},
+            "mean": {"plot": mean_plot, "renderers": [mean_renderer]}}
 
 
 def show_sentiment_history_plot(plot_data, filename="sentiment_history.png"):
     output_file(filename=filename)
-    show(sentiment_history_plot(plot_data)[0])
+    plots = sentiment_history_plots(plot_data)
+    show(VBox(children=[plots["area"]["plot"], plots["mean"]["plot"]]))
 
 
 # need a way to parse time intervals.  Gist from:
@@ -321,9 +333,7 @@ if __name__ == "__main__":
     parser.add_argument('-i', "--interval", help="Time interval for grouping posts.  Examples: 4h, 1d", default="4h")
 
     args = parser.parse_args()
-    tdtype = TimeDeltaType()
-    interval = tdtype(args.interval)
     plot_data = query_sentiment(content_field=args.content_field, time_field=args.time_field, hosts=args.hosts,
                                 categories=args.categories, query=args.query, doctype=args.doctype,
-                                start_time=args.start_time, interval=interval)
+                                start_time=args.start_time, end_time=args.end_time, interval=args.interval)
     show_sentiment_history_plot(plot_data=plot_data, filename="sentiment_plot.html")
