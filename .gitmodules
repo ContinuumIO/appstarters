@@ -1,0 +1,3 @@
+[submodule "facetview2"]
+	path = facetview2
+	url = https://github.com/ContinuumIO/facetview2
